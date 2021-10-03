@@ -1,4 +1,4 @@
-import {classOf, constructorOf, nameOf, toMap, Type} from "@tsed/core";
+import {nameOf, toMap, Type} from "@tsed/core";
 import {Container, createContainer, getConfiguration, InjectorService, IProvider, setLoggerLevel} from "@tsed/di";
 import {importProviders} from "@tsed/components-scan";
 import {PerfLogger} from "@tsed/perf";
@@ -20,8 +20,7 @@ import {
   listenHttpsServer,
   printRoutes
 } from "../utils";
-
-const SKIP_HOOKS = ["$beforeInit", "$afterInit", "$onInit", "$onMountingMiddlewares"];
+import {Route} from "@tsed/common";
 
 /**
  * @ignore
@@ -47,9 +46,10 @@ export abstract class PlatformBuilder<App = TsED.Application, Router = TsED.Rout
   readonly name: string = "";
   protected startedAt = new Date();
   protected locals: Container;
-  #rootModule: any;
+
   #injector: InjectorService;
   #providers: Map<Type, IProvider>;
+  #rootModuleClass: Type<any>;
 
   constructor({name, providers}: {name: string; providers: IProvider[]}) {
     this.name = name;
@@ -70,7 +70,7 @@ export abstract class PlatformBuilder<App = TsED.Application, Router = TsED.Rout
   }
 
   get rootModule(): any {
-    return this.#rootModule;
+    return this.injector.get(this.#rootModuleClass);
   }
 
   get app(): PlatformApplication<App, Router> {
@@ -94,9 +94,9 @@ export abstract class PlatformBuilder<App = TsED.Application, Router = TsED.Rout
    *    }
    * })
    * export class Server {
-   *     $onInit(){
-   *         console.log(this.settings); // {rootDir, port, httpsPort,...}
-   *     }
+   *   $onInit(){
+   *     console.log(this.settings); // {rootDir, port, httpsPort,...}
+   *   }
    * }
    * ```
    *
@@ -172,20 +172,6 @@ export abstract class PlatformBuilder<App = TsED.Application, Router = TsED.Rout
     await this.logRoutes();
   }
 
-  async loadInjector() {
-    const {injector} = this;
-    await this.callHook("$beforeInit");
-
-    this.log("Build providers");
-    const container = createContainer(constructorOf(this.rootModule));
-
-    await injector.load(container, PlatformModule);
-
-    this.log("Settings and injector loaded");
-
-    await this.callHook("$afterInit");
-  }
-
   async listen() {
     await this.callHook("$beforeListen");
 
@@ -212,25 +198,18 @@ export abstract class PlatformBuilder<App = TsED.Application, Router = TsED.Rout
   }
 
   async callHook(hook: string, ...args: any[]) {
-    const {injector, rootModule} = this;
+    const {injector} = this;
     log(hook);
 
     if (!this.disableBootstrapLog) {
       injector.logger.info(`\x1B[1mCall hook ${hook}\x1B[22m`);
     }
 
-    // call hook for the Server
-    if (hook in rootModule) {
-      await rootModule[hook](...args);
-    }
-
     // Load middlewares for the given hook
     this.loadMiddlewaresFor(hook);
 
     // call hooks added by providers
-    if (!SKIP_HOOKS.includes(hook)) {
-      await injector.emit(hook);
-    }
+    await injector.emit(hook, ...args);
   }
 
   async loadStatics(): Promise<void> {
@@ -287,6 +266,7 @@ export abstract class PlatformBuilder<App = TsED.Application, Router = TsED.Rout
   }
 
   protected async bootstrap(module: Type<any>, settings: Partial<TsED.Configuration> = {}) {
+    this.#rootModuleClass = module;
     // istanbul ignore next
     if (settings.logger?.perf) {
       start();
@@ -301,7 +281,6 @@ export abstract class PlatformBuilder<App = TsED.Application, Router = TsED.Rout
       ...settings,
       PLATFORM_NAME: this.name
     });
-    this.createRootModule(module);
 
     await this.runLifecycle();
 
@@ -331,7 +310,9 @@ export abstract class PlatformBuilder<App = TsED.Application, Router = TsED.Rout
     this.log("Load routes");
     await this.callHook("$beforeRoutesInit");
 
-    await this.callHook("$$loadRoutes");
+    const routes = this.injector.settings.get<Route[]>("routes");
+
+    await this.platform.addRoutes(routes);
 
     await this.callHook("$onRoutesInit");
 
@@ -355,10 +336,18 @@ export abstract class PlatformBuilder<App = TsED.Application, Router = TsED.Rout
     createHttpServer(this.injector);
   }
 
-  protected createRootModule(module: Type<any>) {
-    this.#rootModule = this.injector.invoke(module);
+  protected async loadInjector() {
+    const container = createContainer();
 
-    this.injector.delete(constructorOf(this.#rootModule));
-    this.injector.delete(classOf(this.#rootModule));
+    const {injector} = this;
+    await this.callHook("$beforeInit");
+
+    this.log("Build providers");
+
+    await injector.load(container, PlatformModule);
+
+    this.log("Settings and injector loaded");
+
+    await this.callHook("$afterInit");
   }
 }
