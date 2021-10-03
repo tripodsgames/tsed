@@ -3,7 +3,6 @@ import {Container, createContainer, getConfiguration, InjectorService, IProvider
 import {importProviders} from "@tsed/components-scan";
 import {PerfLogger} from "@tsed/perf";
 import {getMiddlewaresForHook} from "@tsed/platform-middlewares";
-import {PlatformLogMiddleware} from "../middlewares";
 import {PlatformModule} from "../PlatformModule";
 import {Platform} from "../services/Platform";
 import {PlatformApplication} from "../services/PlatformApplication";
@@ -323,12 +322,6 @@ export abstract class PlatformBuilder<App = TsED.Application, Router = TsED.Rout
   }
 
   protected async loadRoutes() {
-    // istanbul ignore next
-    if (this.settings.logger?.level !== "off") {
-      const {PlatformLogMiddleware} = await import("@tsed/platform-log-middleware");
-      this.app.use(PlatformLogMiddleware);
-    }
-
     this.log("Load routes");
     await this.callHook("$beforeRoutesInit");
 
